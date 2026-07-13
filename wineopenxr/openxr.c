@@ -84,8 +84,13 @@ XrResult WINAPI wine_xrCreateInstance(const XrInstanceCreateInfo *createInfo, Xr
     goto cleanup;
   }
 
-#define USE_XR_FUNC(x) \
-  xrGetInstanceProcAddr(*instance, #x, (PFN_xrVoidFunction *)&g_xr_host_instance_dispatch_table.p_##x);
+#define USE_XR_FUNC(x)                                                                                        \
+  {                                                                                                           \
+    XrResult _r = xrGetInstanceProcAddr(*instance, #x, (PFN_xrVoidFunction *)&g_xr_host_instance_dispatch_table.p_##x); \
+    if (_r != XR_SUCCESS || !g_xr_host_instance_dispatch_table.p_##x)                                         \
+      ERR("wineopenxr: xrGetInstanceProcAddr(%s) failed res=%d ptr=%p\n", #x, _r,                             \
+          (void *)g_xr_host_instance_dispatch_table.p_##x);                                                   \
+  }
   ALL_XR_INSTANCE_FUNCS()
 #undef USE_XR_FUNC
 
@@ -204,6 +209,10 @@ XrResult WINAPI wine_xrGetVulkanGraphicsDeviceKHR(XrInstance instance,
                                                   VkPhysicalDevice *vkPhysicalDevice) {
   XrResult res;
   TRACE("0x%s, 0x%s, %p, %p\n", TRACE_HANDLE(instance), wine_dbgstr_longlong(systemId), vkInstance, vkPhysicalDevice);
+  if (!g_xr_host_instance_dispatch_table.p_xrGetVulkanGraphicsDeviceKHR) {
+    ERR("wineopenxr: host p_xrGetVulkanGraphicsDeviceKHR is NULL - extension not resolved by native loader\n");
+    return XR_ERROR_FUNCTION_UNSUPPORTED;
+  }
   res = g_xr_host_instance_dispatch_table.p_xrGetVulkanGraphicsDeviceKHR(
       wine_instance_from_handle(instance)->host_instance, systemId, get_native_VkInstance(vkInstance),
       vkPhysicalDevice);
