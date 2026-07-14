@@ -33,6 +33,48 @@ VkPhysicalDevice (*get_native_VkPhysicalDevice)(VkPhysicalDevice);
 VkPhysicalDevice (*get_wrapped_VkPhysicalDevice)(VkInstance, VkPhysicalDevice);
 VkQueue (*get_native_VkQueue)(VkQueue);
 
+/* Inline fallback for when winevulkan.so lacks __wine_get_native_Vk* exports
+ * (GE-Proton 11 shipped 32-bit build). Wine PE-side Vulkan dispatchable
+ * handles are `struct vulkan_client_object { UINT64 loader_magic; UINT64 unix_handle; }*`.
+ * The unix_handle points to a wine_* object whose first UINT64 is the native
+ * host handle (VULKAN_OBJECT_HEADER in wine/include/wine/vulkan_driver.h).
+ *
+ * Because get_wrapped_VkPhysicalDevice has no fallback, we may re-receive
+ * already-native handles from XR call outputs. Check the Vulkan ICD loader
+ * magic (0x01CDC0DE) first; only wrapped handles carry it. */
+#define WINEOXR_ICD_LOADER_MAGIC 0x01CDC0DEu
+static inline UINT64 wineoxr_unwrap_native(void *handle) {
+  struct wineoxr_client_object {
+    UINT64 loader_magic;
+    UINT64 unix_handle;
+  } *client = handle;
+  if (!client) return 0;
+  if ((UINT32)client->loader_magic != WINEOXR_ICD_LOADER_MAGIC) {
+    /* Not a wrapped dispatchable object; treat as already-native. */
+    return (UINT64)(UINT_PTR)handle;
+  }
+  return *(UINT64 *)(UINT_PTR)client->unix_handle;
+}
+static VkDevice wineoxr_fb_get_native_VkDevice(VkDevice h) {
+  return (VkDevice)(UINT_PTR)wineoxr_unwrap_native(h);
+}
+static VkInstance wineoxr_fb_get_native_VkInstance(VkInstance h) {
+  return (VkInstance)(UINT_PTR)wineoxr_unwrap_native(h);
+}
+static VkPhysicalDevice wineoxr_fb_get_native_VkPhysicalDevice(VkPhysicalDevice h) {
+  return (VkPhysicalDevice)(UINT_PTR)wineoxr_unwrap_native(h);
+}
+static VkQueue wineoxr_fb_get_native_VkQueue(VkQueue h) {
+  return (VkQueue)(UINT_PTR)wineoxr_unwrap_native(h);
+}
+/* No available rewrap when winevulkan does not expose it: return native.
+ * Only affects callers that would pass this back into Wine's Vulkan; DXVK
+ * interop callers ignore the value or handle it separately. */
+static VkPhysicalDevice wineoxr_fb_get_wrapped_VkPhysicalDevice(VkInstance inst, VkPhysicalDevice native) {
+  (void)inst;
+  return native;
+}
+
 XrResult WINAPI wine_xrCreateInstance(const XrInstanceCreateInfo *createInfo, XrInstance *instance) {
   XrResult res;
   uint32_t i, j, count = 0;
@@ -114,6 +156,11 @@ XrResult WINAPI wine_xrCreateSession(XrInstance instance, const XrSessionCreateI
         our_vk_binding.instance = get_native_VkInstance(their_vk_binding->instance);
         our_vk_binding.physicalDevice = get_native_VkPhysicalDevice(their_vk_binding->physicalDevice);
         our_vk_binding.device = get_native_VkDevice(their_vk_binding->device);
+        ERR("wineopenxr: xrCreateSession vk binding: instance %p->%p physDev %p->%p device %p->%p queueFam=%u queueIdx=%u\n",
+            their_vk_binding->instance, our_vk_binding.instance,
+            their_vk_binding->physicalDevice, our_vk_binding.physicalDevice,
+            their_vk_binding->device, our_vk_binding.device,
+            their_vk_binding->queueFamilyIndex, their_vk_binding->queueIndex);
 
         our_create_info = *createInfo;
         our_create_info.next = &our_vk_binding;
@@ -208,14 +255,18 @@ XrResult WINAPI wine_xrGetVulkanGraphicsDeviceKHR(XrInstance instance,
                                                   VkInstance vkInstance,
                                                   VkPhysicalDevice *vkPhysicalDevice) {
   XrResult res;
+  wine_XrInstance *wi = wine_instance_from_handle(instance);
+  VkInstance native_vk = get_native_VkInstance(vkInstance);
   TRACE("0x%s, 0x%s, %p, %p\n", TRACE_HANDLE(instance), wine_dbgstr_longlong(systemId), vkInstance, vkPhysicalDevice);
+  ERR("wineopenxr: xrGetVulkanGraphicsDeviceKHR pre-call: wine_inst=%p host_inst=0x%s vkInstance=%p native_vk=%p p_fn=%p\n",
+      wi, wine_dbgstr_longlong(wi ? (uint64_t)wi->host_instance : 0), vkInstance, native_vk,
+      (void *)g_xr_host_instance_dispatch_table.p_xrGetVulkanGraphicsDeviceKHR);
   if (!g_xr_host_instance_dispatch_table.p_xrGetVulkanGraphicsDeviceKHR) {
     ERR("wineopenxr: host p_xrGetVulkanGraphicsDeviceKHR is NULL - extension not resolved by native loader\n");
     return XR_ERROR_FUNCTION_UNSUPPORTED;
   }
   res = g_xr_host_instance_dispatch_table.p_xrGetVulkanGraphicsDeviceKHR(
-      wine_instance_from_handle(instance)->host_instance, systemId, get_native_VkInstance(vkInstance),
-      vkPhysicalDevice);
+      wi->host_instance, systemId, native_vk, vkPhysicalDevice);
   *vkPhysicalDevice = get_wrapped_VkPhysicalDevice(vkInstance, *vkPhysicalDevice);
   return res;
 }
@@ -248,7 +299,7 @@ XrResult WINAPI wine_xrGetVulkanInstanceExtensionsKHR(XrInstance instance,
                                                       uint32_t bufferCapacityInput,
                                                       uint32_t *bufferCountOutput,
                                                       char *buffer) {
-  static const char win32_surface[] = "VK_KHR_surface VK_KHR_win32_surface";
+  static const char win32_surface[] = "VK_KHR_win32_surface";
 
   XrResult res;
   uint32_t lin_len;
@@ -363,7 +414,28 @@ const XrCompositionLayerBaseHeader * const* wine_convert_XrCompositionLayerBaseH
                 out[i] = (XrCompositionLayerBaseHeader*)layer;
                 break;
             }
+            case XR_TYPE_COMPOSITION_LAYER_QUAD:
+            {
+                XrCompositionLayerQuad* layer;
+                XrCompositionLayerQuad32* in_layer = (XrCompositionLayerQuad32*)in[i];
+
+                layer = conversion_context_alloc(ctx, sizeof(XrCompositionLayerQuad));
+                layer->type = in_layer->type;
+                layer->next = NULL;
+                layer->layerFlags = in_layer->layerFlags;
+                layer->space = in_layer->space;
+                layer->eyeVisibility = in_layer->eyeVisibility;
+                layer->subImage.swapchain = in_layer->subImage.swapchain;
+                layer->subImage.imageRect = in_layer->subImage.imageRect;
+                layer->subImage.imageArrayIndex = in_layer->subImage.imageArrayIndex;
+                layer->pose = in_layer->pose;
+                layer->size = in_layer->size;
+
+                out[i] = (XrCompositionLayerBaseHeader*)layer;
+                break;
+            }
             default:
+                ERR("Unsupported composition layer type %d\n", in[i]->type);
                 assert(false && "Unsupported composition layer");
         }
     }
@@ -459,15 +531,17 @@ NTSTATUS init_openxr(void *args) {
     return STATUS_INVALID_PARAMETER;
   }
 
-#define L(name)                                      \
-  if (!(name = dlsym(unix_handle, "__wine_" #name))) \
-    ERR("%s not found.\n", #name);
+#define L(name, fallback)                                     \
+  if (!(name = dlsym(unix_handle, "__wine_" #name))) {         \
+    ERR("%s not exported by winevulkan.so, using inline fallback.\n", #name); \
+    name = (fallback);                                         \
+  }
 
-  L(get_native_VkDevice);
-  L(get_native_VkInstance);
-  L(get_native_VkPhysicalDevice);
-  L(get_wrapped_VkPhysicalDevice);
-  L(get_native_VkQueue);
+  L(get_native_VkDevice,          wineoxr_fb_get_native_VkDevice);
+  L(get_native_VkInstance,        wineoxr_fb_get_native_VkInstance);
+  L(get_native_VkPhysicalDevice,  wineoxr_fb_get_native_VkPhysicalDevice);
+  L(get_wrapped_VkPhysicalDevice, wineoxr_fb_get_wrapped_VkPhysicalDevice);
+  L(get_native_VkQueue,           wineoxr_fb_get_native_VkQueue);
 #undef L
 
   dlclose(unix_handle);

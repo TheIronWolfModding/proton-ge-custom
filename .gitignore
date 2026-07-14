@@ -5,3 +5,7 @@
 
 /.vagrant/
 /vagrant_share/
+
+# Build output directory
+/build/
+/.protonprep-done

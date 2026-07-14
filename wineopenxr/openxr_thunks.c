@@ -1290,15 +1290,19 @@ static inline void convert_XrSessionCreateInfo_win32_to_host(struct conversion_c
         }
         case XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR:
         {
+            /* Apps compiled against upstream OpenXR SDK headers on 32-bit use
+             * naturally-aligned XrGraphicsBindingVulkanKHR (28 bytes), not the
+             * Wine-defined DECLSPEC_ALIGN(8) layout (40 bytes). Read fields at
+             * natural offsets to match. */
             XrGraphicsBindingVulkanKHR *out_ext = conversion_context_alloc(ctx, sizeof(*out_ext));
-            const XrGraphicsBindingVulkanKHR32 *in_ext = (const XrGraphicsBindingVulkanKHR32 *)in_header;
+            const uint32_t *in_raw = (const uint32_t *)in_header;
             out_ext->type = XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR;
             out_ext->next = NULL;
-            out_ext->instance = in_ext->instance;
-            out_ext->physicalDevice = in_ext->physicalDevice;
-            out_ext->device = in_ext->device;
-            out_ext->queueFamilyIndex = in_ext->queueFamilyIndex;
-            out_ext->queueIndex = in_ext->queueIndex;
+            out_ext->instance         = (VkInstance)(UINT_PTR)in_raw[2];        /* offset 8  */
+            out_ext->physicalDevice   = (VkPhysicalDevice)(UINT_PTR)in_raw[3];  /* offset 12 */
+            out_ext->device           = (VkDevice)(UINT_PTR)in_raw[4];          /* offset 16 */
+            out_ext->queueFamilyIndex = in_raw[5];                              /* offset 20 */
+            out_ext->queueIndex       = in_raw[6];                              /* offset 24 */
             out_header->next = (void *)out_ext;
             out_header = (void *)out_ext;
             break;
@@ -7782,6 +7786,8 @@ static inline void convert_XrEventDataBuffer_host_to_win32(const XrEventDataBuff
 {
     if (!in) return;
 
+    out->type = in->type;
+    out->next = 0;
     memcpy(out->varying, in->varying, 4000 * sizeof(uint8_t));
 }
 
