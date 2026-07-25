@@ -1,6 +1,7 @@
 [submodule "wine"]
 	path = wine
 	url = https://github.com/ValveSoftware/wine
+	ignore = dirty
 [submodule "wine-staging"]
 	path = wine-staging
 	url = https://github.com/wine-staging/wine-staging
@@ -22,6 +23,7 @@
 [submodule "gstreamer"]
 	path = gstreamer
 	url = https://github.com/GStreamer/gstreamer.git
+	ignore = dirty
 [submodule "gst-plugins-base"]
 	path = gst-plugins-base
 	url = https://github.com/GStreamer/gst-plugins-base.git
