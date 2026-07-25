@@ -434,6 +434,28 @@ const XrCompositionLayerBaseHeader * const* wine_convert_XrCompositionLayerBaseH
                 out[i] = (XrCompositionLayerBaseHeader*)layer;
                 break;
             }
+            case XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR:
+            {
+                XrCompositionLayerCylinderKHR* layer;
+                XrCompositionLayerCylinderKHR32* in_layer = (XrCompositionLayerCylinderKHR32*)in[i];
+
+                layer = conversion_context_alloc(ctx, sizeof(XrCompositionLayerCylinderKHR));
+                layer->type = in_layer->type;
+                layer->next = NULL;
+                layer->layerFlags = in_layer->layerFlags;
+                layer->space = in_layer->space;
+                layer->eyeVisibility = in_layer->eyeVisibility;
+                layer->subImage.swapchain = in_layer->subImage.swapchain;
+                layer->subImage.imageRect = in_layer->subImage.imageRect;
+                layer->subImage.imageArrayIndex = in_layer->subImage.imageArrayIndex;
+                layer->pose = in_layer->pose;
+                layer->radius = in_layer->radius;
+                layer->centralAngle = in_layer->centralAngle;
+                layer->aspectRatio = in_layer->aspectRatio;
+
+                out[i] = (XrCompositionLayerBaseHeader*)layer;
+                break;
+            }
             default:
                 ERR("Unsupported composition layer type %d\n", in[i]->type);
                 assert(false && "Unsupported composition layer");

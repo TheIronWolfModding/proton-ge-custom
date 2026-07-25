@@ -9,3 +9,6 @@
 # Build output directory
 /build/
 /.protonprep-done
+
+# Build-downloaded runtime components (gecko/mono/xalia), re-fetched as needed
+/contrib/
